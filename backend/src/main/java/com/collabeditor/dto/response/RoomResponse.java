@@ -15,6 +15,7 @@ public class RoomResponse {
     private String code;
     private String language;
     private String ownerUsername;
+    private String content;
     private List<String> memberUsernames;
     private long memberCount;
     private LocalDateTime createdAt;

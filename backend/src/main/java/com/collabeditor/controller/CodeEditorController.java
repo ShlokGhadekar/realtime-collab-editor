@@ -25,25 +25,23 @@ public class CodeEditorController {
     @MessageMapping("/room/edit")
     public void handleCodeChange(@Payload CodeChangeMessage message,
             Principal principal) {
-        // stamp who sent it and when
-        message.setSenderUsername(principal.getName());
+        // use principal if available, otherwise use sender from message
+        String sender = (principal != null) ? principal.getName() : message.getSenderUsername();
+        message.setSenderUsername(sender);
         message.setTimestamp(Instant.now().toEpochMilli());
 
-        // save the latest content to database
         roomService.updateRoomContent(message.getRoomCode(), message.getContent());
 
-        // broadcast to everyone subscribed to this room's topic
         messagingTemplate.convertAndSend(
                 "/topic/room/" + message.getRoomCode(),
                 message);
     }
 
-    // called when a user joins or leaves a room
-    // listens at /app/room/presence
     @MessageMapping("/room/presence")
     public void handlePresence(@Payload UserPresenceMessage message,
             Principal principal) {
-        message.setUsername(principal.getName());
+        String sender = (principal != null) ? principal.getName() : message.getUsername();
+        message.setUsername(sender);
         message.setTimestamp(Instant.now().toEpochMilli());
 
         messagingTemplate.convertAndSend(

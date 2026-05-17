@@ -109,6 +109,7 @@ public class RoomService {
                 room.getName(),
                 room.getCode(),
                 room.getLanguage(),
+                room.getContent(), // add this
                 room.getOwner().getUsername(),
                 memberUsernames,
                 memberUsernames.size(),
