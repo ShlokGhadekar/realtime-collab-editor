@@ -36,4 +36,9 @@ public class RoomController {
     public ResponseEntity<RoomResponse> getRoomById(@PathVariable Long id) {
         return ResponseEntity.ok(roomService.getRoomById(id));
     }
+
+    @GetMapping("/{id}/content")
+    public ResponseEntity<String> getRoomContent(@PathVariable Long id) {
+        return ResponseEntity.ok(roomService.getRoomContent(id));
+    }
 }

@@ -91,6 +91,14 @@ public class RoomService {
         return toResponse(room);
     }
 
+    @Transactional
+    public void updateRoomContent(String roomCode, String content) {
+        Room room = roomRepository.findByCode(roomCode)
+                .orElseThrow(() -> new RuntimeException("Room not found: " + roomCode));
+        room.setContent(content);
+        roomRepository.save(room);
+    }
+
     private RoomResponse toResponse(Room room) {
         List<String> memberUsernames = room.getMembers().stream()
                 .map(m -> m.getUser().getUsername())
@@ -105,5 +113,11 @@ public class RoomService {
                 memberUsernames,
                 memberUsernames.size(),
                 room.getCreatedAt());
+    }
+
+    public String getRoomContent(Long roomId) {
+        Room room = roomRepository.findById(roomId)
+                .orElseThrow(() -> new RuntimeException("Room not found"));
+        return room.getContent();
     }
 }
