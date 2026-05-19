@@ -40,9 +40,11 @@ export default function EditorPage() {
 
     const isRemoteChange = useRef(false);
     const isInitialized = useRef(false);
+    const membersRef = useRef<string[]>([]);
     const debounceTimer = useRef<NodeJS.Timeout | null>(null);
     const autosaveTimer = useRef<NodeJS.Timeout | null>(null);
     const latestCode = useRef('');
+
 
     const saveToServer = useCallback(async (content: string, id: number) => {
         setSaveStatus('saving');
@@ -91,7 +93,9 @@ export default function EditorPage() {
 
             setRoomName(room.name);
             setLanguage(room.language);
-            setMembers([...new Set<string>(room.memberUsernames)]);
+            const uniqueMembers = [...new Set<string>(room.memberUsernames)];
+            membersRef.current = uniqueMembers;
+            setMembers(uniqueMembers);
             setRoomId(room.id);
 
             roomApi.getById(room.id).then((roomRes) => {
@@ -115,14 +119,11 @@ export default function EditorPage() {
                 }
             },
             (msg: PresenceMessage) => {
-                if (msg.event === 'JOINED') {
-                    setMembers((prev) => {
-                        if (prev.includes(msg.username)) return prev;
-                        return [...prev, msg.username];
-                    });
-                } else {
-                    setMembers((prev) => prev.filter((m) => m !== msg.username));
-                }
+                setMembers((prev) => {
+                    const without = prev.filter((m) => m !== msg.username);
+                    if (msg.event === 'JOINED') return [...without, msg.username];
+                    return without;
+                });
             },
             () => setConnected(true)
         );
@@ -214,7 +215,7 @@ export default function EditorPage() {
                 <div className="flex items-center gap-3">
                     {/* Save status */}
                     <span className={`text-xs transition-all ${saveStatus === 'saved' ? 'text-emerald-400/70' :
-                            saveStatus === 'saving' ? 'text-blue-400/70' : 'text-amber-400/70'
+                        saveStatus === 'saving' ? 'text-blue-400/70' : 'text-amber-400/70'
                         }`}>
                         {saveStatus === 'saved' ? '● saved' :
                             saveStatus === 'saving' ? '↑ saving' : '● unsaved'}
