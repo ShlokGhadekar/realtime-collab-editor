@@ -6,7 +6,7 @@ const api = axios.create({
     baseURL: API_BASE,
 });
 
-// automatically attach JWT token to every request
+// attach JWT token to every request
 api.interceptors.request.use((config) => {
     const token = localStorage.getItem('token');
     if (token) {
@@ -14,6 +14,19 @@ api.interceptors.request.use((config) => {
     }
     return config;
 });
+
+// handle auth errors globally
+api.interceptors.response.use(
+    (response) => response,
+    (error) => {
+        const status = error.response?.status;
+        if (status === 401) {
+            localStorage.clear();
+            window.location.href = '/login';
+        }
+        return Promise.reject(error);
+    }
+);
 
 export const authApi = {
     signup: (data: { username: string; email: string; password: string }) =>
@@ -33,6 +46,27 @@ export const roomApi = {
         api.get(`/rooms/${id}`),
     getContent: (id: number) =>
         api.get(`/rooms/${id}/content`),
+    saveContent: (id: number, content: string) =>
+        api.put(`/rooms/${id}/save`, { content }),
+};
+
+
+// Piston API - free, no key needed
+
+
+export const LANGUAGE_IDS: Record<string, string> = {
+    javascript: 'javascript',
+    typescript: 'typescript',
+    python: 'python',
+    java: 'java',
+    cpp: 'cpp',
+    go: 'go',
+    rust: 'rust',
+};
+
+export const executeCode = async (code: string, language: string): Promise<string> => {
+    const res = await api.post('/execute', { code, language });
+    return res.data;
 };
 
 export default api;

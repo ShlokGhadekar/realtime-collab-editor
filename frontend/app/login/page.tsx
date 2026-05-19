@@ -27,53 +27,53 @@ export default function LoginPage() {
     };
 
     return (
-        <div className="min-h-screen bg-gray-950 flex items-center justify-center">
-            <div className="bg-gray-900 p-8 rounded-xl w-full max-w-md border border-gray-800">
-                <h1 className="text-2xl font-bold text-white mb-2">Welcome back</h1>
-                <p className="text-gray-400 mb-6">Sign in to your account</p>
+        <div className="min-h-screen bg-[#0d0d0d] flex items-center justify-center font-mono">
+            <div className="w-full max-w-sm px-6">
+                <div className="mb-10">
+                    <div className="flex items-center gap-2 mb-8">
+                        <div className="w-2 h-2 rounded-full bg-emerald-400" />
+                        <span className="text-white/60 text-sm font-bold tracking-tight">collabeditor</span>
+                    </div>
+                    <h1 className="text-2xl font-bold text-white/90">Welcome back</h1>
+                    <p className="text-white/30 text-sm mt-1">Sign in to continue</p>
+                </div>
 
                 {error && (
-                    <div className="bg-red-500/10 border border-red-500/20 text-red-400 px-4 py-3 rounded-lg mb-4 text-sm">
+                    <div className="bg-red-500/10 border border-red-500/20 text-red-400 px-4 py-3 rounded-lg mb-5 text-sm">
                         {error}
                     </div>
                 )}
 
-                <form onSubmit={handleLogin} className="space-y-4">
-                    <div>
-                        <label className="block text-sm text-gray-400 mb-1">Email</label>
-                        <input
-                            type="email"
-                            value={email}
-                            onChange={(e) => setEmail(e.target.value)}
-                            className="w-full bg-gray-800 text-white rounded-lg px-4 py-3 border border-gray-700 focus:border-blue-500 focus:outline-none"
-                            placeholder="you@example.com"
-                            required
-                        />
-                    </div>
-                    <div>
-                        <label className="block text-sm text-gray-400 mb-1">Password</label>
-                        <input
-                            type="password"
-                            value={password}
-                            onChange={(e) => setPassword(e.target.value)}
-                            className="w-full bg-gray-800 text-white rounded-lg px-4 py-3 border border-gray-700 focus:border-blue-500 focus:outline-none"
-                            placeholder="••••••••"
-                            required
-                        />
-                    </div>
+                <form onSubmit={handleLogin} className="space-y-3">
+                    <input
+                        type="email"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        className="w-full bg-white/[0.04] text-white/80 rounded-lg px-4 py-3 border border-white/[0.08] focus:border-white/20 focus:outline-none text-sm placeholder:text-white/20"
+                        placeholder="email"
+                        required
+                    />
+                    <input
+                        type="password"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        className="w-full bg-white/[0.04] text-white/80 rounded-lg px-4 py-3 border border-white/[0.08] focus:border-white/20 focus:outline-none text-sm placeholder:text-white/20"
+                        placeholder="password"
+                        required
+                    />
                     <button
                         type="submit"
                         disabled={loading}
-                        className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 rounded-lg transition disabled:opacity-50"
+                        className="w-full bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-black font-bold py-3 rounded-lg transition-all text-sm"
                     >
-                        {loading ? 'Signing in...' : 'Sign in'}
+                        {loading ? 'signing in...' : 'sign in →'}
                     </button>
                 </form>
 
-                <p className="text-gray-400 text-sm mt-6 text-center">
-                    No account?{' '}
-                    <a href="/signup" className="text-blue-400 hover:underline">
-                        Sign up
+                <p className="text-white/20 text-sm mt-6 text-center">
+                    no account?{' '}
+                    <a href="/signup" className="text-emerald-400/70 hover:text-emerald-400 transition-colors">
+                        sign up
                     </a>
                 </p>
             </div>

@@ -25,13 +25,12 @@ public class CodeEditorController {
     @MessageMapping("/room/edit")
     public void handleCodeChange(@Payload CodeChangeMessage message,
             Principal principal) {
-        // use principal if available, otherwise use sender from message
         String sender = (principal != null) ? principal.getName() : message.getSenderUsername();
         message.setSenderUsername(sender);
         message.setTimestamp(Instant.now().toEpochMilli());
 
-        roomService.updateRoomContent(message.getRoomCode(), message.getContent());
-
+        // DO NOT save here — only broadcast
+        // saving is handled by the explicit PUT /rooms/{id}/save endpoint
         messagingTemplate.convertAndSend(
                 "/topic/room/" + message.getRoomCode(),
                 message);

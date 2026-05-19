@@ -41,4 +41,12 @@ public class RoomController {
     public ResponseEntity<String> getRoomContent(@PathVariable Long id) {
         return ResponseEntity.ok(roomService.getRoomContent(id));
     }
+
+    @PutMapping("/{id}/save")
+    public ResponseEntity<Void> saveContent(
+            @PathVariable Long id,
+            @RequestBody java.util.Map<String, String> body) {
+        roomService.saveContent(id, body.get("content"));
+        return ResponseEntity.ok().build();
+    }
 }

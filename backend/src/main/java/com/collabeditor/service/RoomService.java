@@ -121,4 +121,12 @@ public class RoomService {
                 .orElseThrow(() -> new RuntimeException("Room not found"));
         return room.getContent();
     }
+
+    @Transactional
+    public void saveContent(Long roomId, String content) {
+        Room room = roomRepository.findById(roomId)
+                .orElseThrow(() -> new RuntimeException("Room not found"));
+        room.setContent(content);
+        roomRepository.save(room);
+    }
 }

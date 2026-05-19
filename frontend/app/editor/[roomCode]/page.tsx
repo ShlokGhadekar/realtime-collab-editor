@@ -2,7 +2,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import dynamic from 'next/dynamic';
-import { roomApi } from '@/lib/api';
+import { roomApi, executeCode, LANGUAGE_IDS } from '@/lib/api';
 import {
     connectWebSocket,
     disconnectWebSocket,
@@ -13,19 +13,67 @@ import {
 
 const MonacoEditor = dynamic(() => import('@monaco-editor/react'), { ssr: false });
 
+type SaveStatus = 'saved' | 'unsaved' | 'saving';
+
+const COLORS = [
+    'bg-violet-500', 'bg-emerald-500', 'bg-orange-500',
+    'bg-pink-500', 'bg-cyan-500', 'bg-yellow-500'
+];
+
 export default function EditorPage() {
     const router = useRouter();
     const params = useParams();
     const roomCode = params.roomCode as string;
 
-    const [code, setCode] = useState('// Start coding...\n');
+    const [code, setCode] = useState<string | null>(null);
     const [language, setLanguage] = useState('javascript');
     const [roomName, setRoomName] = useState('');
+    const [roomId, setRoomId] = useState<number | null>(null);
     const [members, setMembers] = useState<string[]>([]);
     const [connected, setConnected] = useState(false);
     const [username, setUsername] = useState('');
+    const [saveStatus, setSaveStatus] = useState<SaveStatus>('saved');
+    const [output, setOutput] = useState<string | null>(null);
+    const [running, setRunning] = useState(false);
+    const [showOutput, setShowOutput] = useState(false);
+    const [copied, setCopied] = useState(false);
 
     const isRemoteChange = useRef(false);
+    const isInitialized = useRef(false);
+    const debounceTimer = useRef<NodeJS.Timeout | null>(null);
+    const autosaveTimer = useRef<NodeJS.Timeout | null>(null);
+    const latestCode = useRef('');
+
+    const saveToServer = useCallback(async (content: string, id: number) => {
+        setSaveStatus('saving');
+        try {
+            await roomApi.saveContent(id, content);
+            setSaveStatus('saved');
+        } catch (e) {
+            console.error('Save failed', e);
+            setSaveStatus('unsaved');
+        }
+    }, []);
+
+    const handleRun = async () => {
+        setRunning(true);
+        setShowOutput(true);
+        setOutput('Running...');
+        try {
+            const result = await executeCode(latestCode.current, language);
+            setOutput(result);
+        } catch {
+            setOutput('Execution failed. Check your API key.');
+        } finally {
+            setRunning(false);
+        }
+    };
+
+    const copyRoomCode = () => {
+        navigator.clipboard.writeText(roomCode);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+    };
 
     useEffect(() => {
         const token = localStorage.getItem('token');
@@ -35,40 +83,43 @@ export default function EditorPage() {
 
         roomApi.myRooms().then((res) => {
             const room = res.data.find((r: {
-                code: string;
-                name: string;
-                language: string;
-                memberUsernames: string[];
-                id: number;
+                code: string; name: string; language: string;
+                memberUsernames: string[]; id: number;
             }) => r.code === roomCode);
 
             if (!room) { router.push('/dashboard'); return; }
 
             setRoomName(room.name);
             setLanguage(room.language);
-            setMembers(room.memberUsernames);
+            setMembers([...new Set<string>(room.memberUsernames)]);
+            setRoomId(room.id);
 
             roomApi.getById(room.id).then((roomRes) => {
-                setCode(roomRes.data.content || '// Start coding...\n');
+                const savedContent = roomRes.data.content || '// Start coding...\n';
+                isInitialized.current = false;
+                setCode(savedContent);
+                latestCode.current = savedContent;
             }).catch(() => {
+                isInitialized.current = false;
                 setCode('// Start coding...\n');
+                latestCode.current = '// Start coding...\n';
             });
-        }).catch(() => {
-            router.push('/login');
-        });
+        }).catch(() => router.push('/login'));
 
-        connectWebSocket(
-            roomCode,
-            user,
+        connectWebSocket(roomCode, user,
             (msg: CodeChangeMessage) => {
                 if (msg.senderUsername !== user) {
                     isRemoteChange.current = true;
                     setCode(msg.content);
+                    latestCode.current = msg.content;
                 }
             },
             (msg: PresenceMessage) => {
                 if (msg.event === 'JOINED') {
-                    setMembers((prev) => [...new Set([...prev, msg.username])]);
+                    setMembers((prev) => {
+                        if (prev.includes(msg.username)) return prev;
+                        return [...prev, msg.username];
+                    });
                 } else {
                     setMembers((prev) => prev.filter((m) => m !== msg.username));
                 }
@@ -78,94 +129,219 @@ export default function EditorPage() {
 
         return () => {
             disconnectWebSocket(roomCode, user);
+            if (debounceTimer.current) clearTimeout(debounceTimer.current);
+            if (autosaveTimer.current) clearInterval(autosaveTimer.current);
         };
     }, [roomCode]);
 
+    useEffect(() => {
+        if (!roomId) return;
+        autosaveTimer.current = setInterval(() => {
+            if (saveStatus === 'unsaved') saveToServer(latestCode.current, roomId);
+        }, 30000);
+        return () => { if (autosaveTimer.current) clearInterval(autosaveTimer.current); };
+    }, [roomId, saveStatus, saveToServer]);
+
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+                e.preventDefault();
+                if (roomId) saveToServer(latestCode.current, roomId);
+            }
+            if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+                e.preventDefault();
+                handleRun();
+            }
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [roomId, saveToServer]);
+
     const handleCodeChange = useCallback((value: string | undefined) => {
+        if (code === null) return;
+        if (!isInitialized.current) { isInitialized.current = true; return; }
+
         const newCode = value || '';
         setCode(newCode);
+        latestCode.current = newCode;
 
-        if (isRemoteChange.current) {
-            isRemoteChange.current = false;
-            return;
-        }
+        if (isRemoteChange.current) { isRemoteChange.current = false; return; }
 
-        sendCodeChange({
-            roomCode,
-            content: newCode,
-            senderUsername: username,
-            language,
-            timestamp: Date.now(),
-        });
-    }, [roomCode, username, language]);
+        setSaveStatus('unsaved');
+        sendCodeChange({ roomCode, content: newCode, senderUsername: username, language, timestamp: Date.now() });
+
+        if (debounceTimer.current) clearTimeout(debounceTimer.current);
+        debounceTimer.current = setTimeout(() => {
+            if (roomId) saveToServer(newCode, roomId);
+        }, 2000);
+    }, [roomCode, username, language, roomId, saveToServer, code]);
 
     return (
-        <div className="h-screen bg-gray-950 flex flex-col">
-            <div className="flex items-center justify-between px-4 py-2 border-b border-gray-800 bg-gray-900">
-                <div className="flex items-center gap-4">
+        <div className="h-screen bg-[#0d0d0d] flex flex-col font-mono">
+
+            {/* Top bar */}
+            <div className="h-11 flex items-center justify-between px-4 border-b border-white/[0.06] bg-[#111111]">
+                <div className="flex items-center gap-3">
                     <button
                         onClick={() => router.push('/dashboard')}
-                        className="text-gray-400 hover:text-white text-sm transition"
+                        className="flex items-center gap-1.5 text-white/40 hover:text-white/80 text-xs transition-colors"
                     >
-                        ← Back
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <path d="M19 12H5M12 19l-7-7 7-7" />
+                        </svg>
+                        Dashboard
                     </button>
-                    <span className="text-white font-medium">{roomName}</span>
-                    <span className="font-mono text-xs text-gray-500 bg-gray-800 px-2 py-1 rounded">
-                        {roomCode}
-                    </span>
-                </div>
 
-                <div className="flex items-center gap-4">
+                    <span className="text-white/10">|</span>
+
                     <div className="flex items-center gap-2">
-                        <div className={`w-2 h-2 rounded-full ${connected ? 'bg-green-400' : 'bg-yellow-400'}`} />
-                        <span className="text-xs text-gray-400">
-                            {connected ? 'Live' : 'Connecting...'}
-                        </span>
+                        <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                        <span className="text-white/70 text-xs font-medium">{roomName}</span>
                     </div>
 
-                    <div className="flex items-center gap-1">
-                        {members.slice(0, 4).map((member) => (
+                    <button
+                        onClick={copyRoomCode}
+                        className="flex items-center gap-1.5 bg-white/[0.05] hover:bg-white/[0.09] border border-white/[0.08] rounded px-2 py-0.5 transition-all"
+                    >
+                        <span className="text-white/50 text-xs tracking-widest">{roomCode}</span>
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-white/30">
+                            <rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+                        </svg>
+                        {copied && <span className="text-emerald-400 text-xs">✓</span>}
+                    </button>
+                </div>
+
+                <div className="flex items-center gap-3">
+                    {/* Save status */}
+                    <span className={`text-xs transition-all ${saveStatus === 'saved' ? 'text-emerald-400/70' :
+                            saveStatus === 'saving' ? 'text-blue-400/70' : 'text-amber-400/70'
+                        }`}>
+                        {saveStatus === 'saved' ? '● saved' :
+                            saveStatus === 'saving' ? '↑ saving' : '● unsaved'}
+                    </span>
+
+                    {/* Members */}
+                    <div className="flex items-center">
+                        {[...new Set(members)].slice(0, 5).map((member, i) => (
                             <div
                                 key={member}
                                 title={member}
-                                className="w-7 h-7 rounded-full bg-blue-600 flex items-center justify-center text-xs font-medium text-white"
+                                style={{ zIndex: 10 - i, marginLeft: i > 0 ? '-6px' : '0' }}
+                                className={`w-6 h-6 rounded-full ${COLORS[i % COLORS.length]} flex items-center justify-center text-[10px] font-bold text-white border-2 border-[#111111] relative`}
                             >
                                 {member[0].toUpperCase()}
                             </div>
                         ))}
-                        {members.length > 4 && (
-                            <span className="text-xs text-gray-400">+{members.length - 4}</span>
+                        {members.length > 5 && (
+                            <div style={{ zIndex: 0, marginLeft: '-6px' }} className="w-6 h-6 rounded-full bg-white/10 flex items-center justify-center text-[9px] text-white/50 border-2 border-[#111111]">
+                                +{members.length - 5}
+                            </div>
                         )}
                     </div>
 
+                    {/* Language selector */}
                     <select
                         value={language}
                         onChange={(e) => setLanguage(e.target.value)}
-                        className="bg-gray-800 text-gray-300 text-sm rounded px-2 py-1 border border-gray-700"
+                        className="bg-white/[0.05] border border-white/[0.08] text-white/60 text-xs rounded px-2 py-1 focus:outline-none focus:border-white/20"
                     >
-                        {['javascript', 'typescript', 'python', 'java', 'cpp', 'go', 'rust'].map((l) => (
-                            <option key={l} value={l}>{l}</option>
+                        {Object.keys(LANGUAGE_IDS).map((l) => (
+                            <option key={l} value={l} className="bg-[#1a1a1a]">{l}</option>
                         ))}
                     </select>
+
+                    {/* Run button */}
+                    <button
+                        onClick={handleRun}
+                        disabled={running}
+                        className="flex items-center gap-1.5 bg-emerald-500 hover:bg-emerald-400 disabled:bg-emerald-500/40 text-black text-xs font-bold px-3 py-1.5 rounded transition-all"
+                    >
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M5 3l14 9-14 9V3z" />
+                        </svg>
+                        {running ? 'Running...' : 'Run'}
+                        <span className="text-black/40 text-[10px]">⌘↵</span>
+                    </button>
+
+                    {/* Manual save */}
+                    <button
+                        onClick={() => roomId && saveToServer(latestCode.current, roomId)}
+                        className="text-white/30 hover:text-white/70 text-xs transition-colors"
+                    >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z" /><polyline points="17 21 17 13 7 13 7 21" /><polyline points="7 3 7 8 15 8" />
+                        </svg>
+                    </button>
+
+                    {/* Connection dot */}
+                    <div className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'}`} title={connected ? 'Connected' : 'Connecting...'} />
                 </div>
             </div>
 
-            <div className="flex-1">
-                <MonacoEditor
-                    height="100%"
-                    language={language}
-                    value={code}
-                    onChange={handleCodeChange}
-                    theme="vs-dark"
-                    options={{
-                        fontSize: 14,
-                        minimap: { enabled: false },
-                        scrollBeyondLastLine: false,
-                        wordWrap: 'on',
-                        automaticLayout: true,
-                        tabSize: 2,
-                    }}
-                />
+            {/* Editor + Output */}
+            <div className="flex-1 flex flex-col overflow-hidden">
+                <div className={`${showOutput ? 'h-[60%]' : 'h-full'} transition-all`}>
+                    {code === null ? (
+                        <div className="h-full flex items-center justify-center">
+                            <div className="flex items-center gap-3 text-white/20 text-sm">
+                                <svg className="animate-spin" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                    <path d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                </svg>
+                                Loading editor...
+                            </div>
+                        </div>
+                    ) : (
+                        <MonacoEditor
+                            height="100%"
+                            language={language}
+                            value={code}
+                            onChange={handleCodeChange}
+                            theme="vs-dark"
+                            options={{
+                                fontSize: 13,
+                                fontFamily: '"JetBrains Mono", "Fira Code", Menlo, monospace',
+                                fontLigatures: true,
+                                minimap: { enabled: false },
+                                scrollBeyondLastLine: false,
+                                wordWrap: 'on',
+                                automaticLayout: true,
+                                tabSize: 2,
+                                lineNumbers: 'on',
+                                renderLineHighlight: 'line',
+                                cursorBlinking: 'smooth',
+                                smoothScrolling: true,
+                                padding: { top: 16 },
+                            }}
+                        />
+                    )}
+                </div>
+
+                {/* Output panel */}
+                {showOutput && (
+                    <div className="flex flex-col border-t border-white/[0.06] bg-[#0a0a0a]" style={{ height: '40%' }}>
+                        <div className="flex items-center justify-between px-4 py-2 border-b border-white/[0.04]">
+                            <div className="flex items-center gap-2">
+                                <span className="text-white/30 text-xs uppercase tracking-wider">Output</span>
+                                {running && (
+                                    <svg className="animate-spin text-emerald-400" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                        <path d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                    </svg>
+                                )}
+                            </div>
+                            <button
+                                onClick={() => setShowOutput(false)}
+                                className="text-white/20 hover:text-white/50 transition-colors"
+                            >
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                    <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                                </svg>
+                            </button>
+                        </div>
+                        <pre className="flex-1 overflow-auto p-4 text-xs text-emerald-300/80 leading-relaxed font-mono">
+                            {output || 'No output yet. Press ⌘↵ to run.'}
+                        </pre>
+                    </div>
+                )}
             </div>
         </div>
     );
