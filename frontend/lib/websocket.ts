@@ -1,6 +1,6 @@
 import { Client } from '@stomp/stompjs';
 import SockJS from 'sockjs-client';
-
+const WS_URL = process.env.NEXT_PUBLIC_WS_URL || 'http://localhost:8080/ws';
 export interface CodeChangeMessage {
     roomCode: string;
     content: string;
@@ -33,7 +33,7 @@ export const connectWebSocket = (
     }
 
     const client = new Client({
-        webSocketFactory: () => new SockJS('http://localhost:8080/ws'),
+        webSocketFactory: () => new SockJS(WS_URL),
         reconnectDelay: 5000,
         connectHeaders: {
             Authorization: `Bearer ${localStorage.getItem('token') || ''}`,
