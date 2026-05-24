@@ -21,7 +21,7 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import java.util.List;
-import org.springframework.http.HttpMethod;
+
 
 @Configuration
 @EnableWebSecurity
@@ -70,7 +70,7 @@ public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         return new BCryptPasswordEncoder();
     }
 
-    @Bean
+@Bean
 public CorsConfigurationSource corsConfigurationSource() {
     CorsConfiguration config = new CorsConfiguration();
     config.setAllowedOrigins(List.of(
@@ -78,15 +78,10 @@ public CorsConfigurationSource corsConfigurationSource() {
         "https://realtime-collab-editor-two.vercel.app"
     ));
     config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
-    config.setAllowedHeaders(List.of(
-    "Authorization",
-    "Content-Type",
-    "Accept",
-    "Origin",
-    "X-Requested-With"
-));
+    config.setAllowedHeaders(List.of("*"));
     config.setAllowCredentials(true);
     config.setExposedHeaders(List.of("Authorization"));
+
     UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
     source.registerCorsConfiguration("/**", config);
     return source;
