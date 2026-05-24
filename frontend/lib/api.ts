@@ -10,8 +10,10 @@ const api = axios.create({
 // attach JWT token to every request
 api.interceptors.request.use((config) => {
     const token = localStorage.getItem('token');
-    if (token) {
+    if (token && token !== 'null' && token !== 'undefined' && token.length > 10) {
         config.headers.Authorization = `Bearer ${token}`;
+    } else {
+        delete config.headers.Authorization;
     }
     return config;
 });
