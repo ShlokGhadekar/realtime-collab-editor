@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import dynamic from 'next/dynamic';
 import { roomApi, executeCode, LANGUAGE_IDS } from '@/lib/api';
@@ -24,7 +24,6 @@ export default function EditorPage() {
     const router = useRouter();
     const params = useParams();
     const roomCode = params.roomCode as string;
-    const editorRef = useRef<any>(null);
 
     const [code, setCode] = useState<string | null>(null);
     const [language, setLanguage] = useState('javascript');
@@ -39,15 +38,19 @@ export default function EditorPage() {
     const [showOutput, setShowOutput] = useState(false);
     const [copied, setCopied] = useState(false);
 
+    // refs — never stale inside callbacks
+    const editorRef = useRef<any>(null);
     const isRemoteChange = useRef(false);
     const isInitialized = useRef(false);
-    const membersRef = useRef<string[]>([]);
     const debounceTimer = useRef<NodeJS.Timeout | null>(null);
     const autosaveTimer = useRef<NodeJS.Timeout | null>(null);
     const latestCode = useRef('');
+    const usernameRef = useRef('');
+    const roomIdRef = useRef<number | null>(null);
+    const languageRef = useRef('javascript');
+    const roomCodeRef = useRef(roomCode);
 
-
-    const saveToServer = useCallback(async (content: string, id: number) => {
+    const saveToServer = async (content: string, id: number) => {
         setSaveStatus('saving');
         try {
             await roomApi.saveContent(id, content);
@@ -56,17 +59,17 @@ export default function EditorPage() {
             console.error('Save failed', e);
             setSaveStatus('unsaved');
         }
-    }, []);
+    };
 
     const handleRun = async () => {
         setRunning(true);
         setShowOutput(true);
         setOutput('Running...');
         try {
-            const result = await executeCode(latestCode.current, language);
+            const result = await executeCode(latestCode.current, languageRef.current);
             setOutput(result);
         } catch {
-            setOutput('Execution failed. Check your API key.');
+            setOutput('Execution failed.');
         } finally {
             setRunning(false);
         }
@@ -78,11 +81,17 @@ export default function EditorPage() {
         setTimeout(() => setCopied(false), 2000);
     };
 
+    // keep refs in sync with state
+    useEffect(() => { usernameRef.current = username; }, [username]);
+    useEffect(() => { roomIdRef.current = roomId; }, [roomId]);
+    useEffect(() => { languageRef.current = language; }, [language]);
+
     useEffect(() => {
         const token = localStorage.getItem('token');
         const user = localStorage.getItem('username') || '';
         if (!token) { router.push('/login'); return; }
         setUsername(user);
+        usernameRef.current = user;
 
         roomApi.myRooms().then((res) => {
             const room = res.data.find((r: {
@@ -94,10 +103,11 @@ export default function EditorPage() {
 
             setRoomName(room.name);
             setLanguage(room.language);
+            languageRef.current = room.language;
             const uniqueMembers = [...new Set<string>(room.memberUsernames)];
-            membersRef.current = uniqueMembers;
             setMembers(uniqueMembers);
             setRoomId(room.id);
+            roomIdRef.current = room.id;
 
             roomApi.getById(room.id).then((roomRes) => {
                 const savedContent = roomRes.data.content || '// Start coding...\n';
@@ -113,17 +123,17 @@ export default function EditorPage() {
 
         connectWebSocket(roomCode, user,
             (msg: CodeChangeMessage) => {
-    if (msg.senderUsername !== user) {
-        isRemoteChange.current = true;
-        latestCode.current = msg.content;
-        if (editorRef.current) {
-            const editor = editorRef.current;
-            const position = editor.getPosition();
-            editor.setValue(msg.content);
-            if (position) editor.setPosition(position);
-        }
-    }
-},
+                if (msg.senderUsername !== user) {
+                    isRemoteChange.current = true;
+                    latestCode.current = msg.content;
+                    if (editorRef.current) {
+                        const editor = editorRef.current;
+                        const position = editor.getPosition();
+                        editor.setValue(msg.content);
+                        if (position) editor.setPosition(position);
+                    }
+                }
+            },
             (msg: PresenceMessage) => {
                 setMembers((prev) => {
                     const without = prev.filter((m) => m !== msg.username);
@@ -144,16 +154,18 @@ export default function EditorPage() {
     useEffect(() => {
         if (!roomId) return;
         autosaveTimer.current = setInterval(() => {
-            if (saveStatus === 'unsaved') saveToServer(latestCode.current, roomId);
+            if (saveStatus === 'unsaved' && roomIdRef.current) {
+                saveToServer(latestCode.current, roomIdRef.current);
+            }
         }, 30000);
         return () => { if (autosaveTimer.current) clearInterval(autosaveTimer.current); };
-    }, [roomId, saveStatus, saveToServer]);
+    }, [roomId, saveStatus]);
 
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
             if ((e.metaKey || e.ctrlKey) && e.key === 's') {
                 e.preventDefault();
-                if (roomId) saveToServer(latestCode.current, roomId);
+                if (roomIdRef.current) saveToServer(latestCode.current, roomIdRef.current);
             }
             if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
                 e.preventDefault();
@@ -162,13 +174,10 @@ export default function EditorPage() {
         };
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [roomId, saveToServer]);
-
-    
+    }, []);
 
     return (
         <div className="h-screen bg-[#0d0d0d] flex flex-col font-mono">
-
             {/* Top bar */}
             <div className="h-11 flex items-center justify-between px-4 border-b border-white/[0.06] bg-[#111111]">
                 <div className="flex items-center gap-3">
@@ -181,14 +190,11 @@ export default function EditorPage() {
                         </svg>
                         Dashboard
                     </button>
-
                     <span className="text-white/10">|</span>
-
                     <div className="flex items-center gap-2">
                         <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
                         <span className="text-white/70 text-xs font-medium">{roomName}</span>
                     </div>
-
                     <button
                         onClick={copyRoomCode}
                         className="flex items-center gap-1.5 bg-white/[0.05] hover:bg-white/[0.09] border border-white/[0.08] rounded px-2 py-0.5 transition-all"
@@ -202,15 +208,14 @@ export default function EditorPage() {
                 </div>
 
                 <div className="flex items-center gap-3">
-                    {/* Save status */}
-                    <span className={`text-xs transition-all ${saveStatus === 'saved' ? 'text-emerald-400/70' :
+                    <span className={`text-xs transition-all ${
+                        saveStatus === 'saved' ? 'text-emerald-400/70' :
                         saveStatus === 'saving' ? 'text-blue-400/70' : 'text-amber-400/70'
-                        }`}>
+                    }`}>
                         {saveStatus === 'saved' ? '● saved' :
-                            saveStatus === 'saving' ? '↑ saving' : '● unsaved'}
+                         saveStatus === 'saving' ? '↑ saving' : '● unsaved'}
                     </span>
 
-                    {/* Members */}
                     <div className="flex items-center">
                         {[...new Set(members)].slice(0, 5).map((member, i) => (
                             <div
@@ -229,10 +234,12 @@ export default function EditorPage() {
                         )}
                     </div>
 
-                    {/* Language selector */}
                     <select
                         value={language}
-                        onChange={(e) => setLanguage(e.target.value)}
+                        onChange={(e) => {
+                            setLanguage(e.target.value);
+                            languageRef.current = e.target.value;
+                        }}
                         className="bg-white/[0.05] border border-white/[0.08] text-white/60 text-xs rounded px-2 py-1 focus:outline-none focus:border-white/20"
                     >
                         {Object.keys(LANGUAGE_IDS).map((l) => (
@@ -240,7 +247,6 @@ export default function EditorPage() {
                         ))}
                     </select>
 
-                    {/* Run button */}
                     <button
                         onClick={handleRun}
                         disabled={running}
@@ -253,18 +259,21 @@ export default function EditorPage() {
                         <span className="text-black/40 text-[10px]">⌘↵</span>
                     </button>
 
-                    {/* Manual save */}
                     <button
-                        onClick={() => roomId && saveToServer(latestCode.current, roomId)}
+                        onClick={() => roomIdRef.current && saveToServer(latestCode.current, roomIdRef.current)}
                         className="text-white/30 hover:text-white/70 text-xs transition-colors"
                     >
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                            <path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z" /><polyline points="17 21 17 13 7 13 7 21" /><polyline points="7 3 7 8 15 8" />
+                            <path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z" />
+                            <polyline points="17 21 17 13 7 13 7 21" />
+                            <polyline points="7 3 7 8 15 8" />
                         </svg>
                     </button>
 
-                    {/* Connection dot */}
-                    <div className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'}`} title={connected ? 'Connected' : 'Connecting...'} />
+                    <div
+                        className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'}`}
+                        title={connected ? 'Connected' : 'Connecting...'}
+                    />
                 </div>
             </div>
 
@@ -282,61 +291,65 @@ export default function EditorPage() {
                         </div>
                     ) : (
                         <MonacoEditor
-    height="100%"
-    language={language}
-    defaultValue={code || ''}
-    theme="vs-dark"
-    onMount={(editor) => {
-        editorRef.current = editor;
-        editor.onDidChangeModelContent(() => {
-            const value = editor.getValue();
-            latestCode.current = value;
+                            height="100%"
+                            language={language}
+                            defaultValue={code}
+                            theme="vs-dark"
+                            onMount={(editor) => {
+                                editorRef.current = editor;
+                                isInitialized.current = false;
 
-            if (isRemoteChange.current) {
-                isRemoteChange.current = false;
-                return;
-            }
+                                editor.onDidChangeModelContent(() => {
+                                    const value = editor.getValue();
+                                    latestCode.current = value;
 
-            if (!isInitialized.current) {
-                isInitialized.current = true;
-                return;
-            }
+                                    if (isRemoteChange.current) {
+                                        isRemoteChange.current = false;
+                                        return;
+                                    }
 
-            setSaveStatus('unsaved');
-            sendCodeChange({
-                roomCode,
-                content: value,
-                senderUsername: username,
-                language,
-                timestamp: Date.now(),
-            });
+                                    if (!isInitialized.current) {
+                                        isInitialized.current = true;
+                                        return;
+                                    }
 
-            if (debounceTimer.current) clearTimeout(debounceTimer.current);
-            debounceTimer.current = setTimeout(() => {
-                if (roomId) saveToServer(value, roomId);
-            }, 2000);
-        });
-    }}
-    options={{
-        fontSize: 13,
-        fontFamily: '"JetBrains Mono", "Fira Code", Menlo, monospace',
-        fontLigatures: true,
-        minimap: { enabled: false },
-        scrollBeyondLastLine: false,
-        wordWrap: 'on',
-        automaticLayout: true,
-        tabSize: 2,
-        lineNumbers: 'on',
-        renderLineHighlight: 'line',
-        cursorBlinking: 'smooth',
-        smoothScrolling: true,
-        padding: { top: 16 },
-    }}
-/>
+                                    setSaveStatus('unsaved');
+
+                                    sendCodeChange({
+                                        roomCode: roomCodeRef.current,
+                                        content: value,
+                                        senderUsername: usernameRef.current,
+                                        language: languageRef.current,
+                                        timestamp: Date.now(),
+                                    });
+
+                                    if (debounceTimer.current) clearTimeout(debounceTimer.current);
+                                    debounceTimer.current = setTimeout(() => {
+                                        if (roomIdRef.current) {
+                                            saveToServer(value, roomIdRef.current);
+                                        }
+                                    }, 2000);
+                                });
+                            }}
+                            options={{
+                                fontSize: 13,
+                                fontFamily: '"JetBrains Mono", "Fira Code", Menlo, monospace',
+                                fontLigatures: true,
+                                minimap: { enabled: false },
+                                scrollBeyondLastLine: false,
+                                wordWrap: 'on',
+                                automaticLayout: true,
+                                tabSize: 2,
+                                lineNumbers: 'on',
+                                renderLineHighlight: 'line',
+                                cursorBlinking: 'smooth',
+                                smoothScrolling: true,
+                                padding: { top: 16 },
+                            }}
+                        />
                     )}
                 </div>
 
-                {/* Output panel */}
                 {showOutput && (
                     <div className="flex flex-col border-t border-white/[0.06] bg-[#0a0a0a]" style={{ height: '40%' }}>
                         <div className="flex items-center justify-between px-4 py-2 border-b border-white/[0.04]">
@@ -353,7 +366,8 @@ export default function EditorPage() {
                                 className="text-white/20 hover:text-white/50 transition-colors"
                             >
                                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                    <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                                    <line x1="18" y1="6" x2="6" y2="18" />
+                                    <line x1="6" y1="6" x2="18" y2="18" />
                                 </svg>
                             </button>
                         </div>
