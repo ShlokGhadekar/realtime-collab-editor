@@ -24,6 +24,7 @@ export default function EditorPage() {
     const router = useRouter();
     const params = useParams();
     const roomCode = params.roomCode as string;
+    const editorRef = useRef<any>(null);
 
     const [code, setCode] = useState<string | null>(null);
     const [language, setLanguage] = useState('javascript');
@@ -112,12 +113,17 @@ export default function EditorPage() {
 
         connectWebSocket(roomCode, user,
             (msg: CodeChangeMessage) => {
-                if (msg.senderUsername !== user) {
-                    isRemoteChange.current = true;
-                    setCode(msg.content);
-                    latestCode.current = msg.content;
-                }
-            },
+    if (msg.senderUsername !== user) {
+        isRemoteChange.current = true;
+        latestCode.current = msg.content;
+        if (editorRef.current) {
+            const editor = editorRef.current;
+            const position = editor.getPosition();
+            editor.setValue(msg.content);
+            if (position) editor.setPosition(position);
+        }
+    }
+},
             (msg: PresenceMessage) => {
                 setMembers((prev) => {
                     const without = prev.filter((m) => m !== msg.username);
@@ -158,24 +164,7 @@ export default function EditorPage() {
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [roomId, saveToServer]);
 
-    const handleCodeChange = useCallback((value: string | undefined) => {
-        if (code === null) return;
-        if (!isInitialized.current) { isInitialized.current = true; return; }
-
-        const newCode = value || '';
-        setCode(newCode);
-        latestCode.current = newCode;
-
-        if (isRemoteChange.current) { isRemoteChange.current = false; return; }
-
-        setSaveStatus('unsaved');
-        sendCodeChange({ roomCode, content: newCode, senderUsername: username, language, timestamp: Date.now() });
-
-        if (debounceTimer.current) clearTimeout(debounceTimer.current);
-        debounceTimer.current = setTimeout(() => {
-            if (roomId) saveToServer(newCode, roomId);
-        }, 2000);
-    }, [roomCode, username, language, roomId, saveToServer, code]);
+    
 
     return (
         <div className="h-screen bg-[#0d0d0d] flex flex-col font-mono">
@@ -293,27 +282,57 @@ export default function EditorPage() {
                         </div>
                     ) : (
                         <MonacoEditor
-                            height="100%"
-                            language={language}
-                            value={code}
-                            onChange={handleCodeChange}
-                            theme="vs-dark"
-                            options={{
-                                fontSize: 13,
-                                fontFamily: '"JetBrains Mono", "Fira Code", Menlo, monospace',
-                                fontLigatures: true,
-                                minimap: { enabled: false },
-                                scrollBeyondLastLine: false,
-                                wordWrap: 'on',
-                                automaticLayout: true,
-                                tabSize: 2,
-                                lineNumbers: 'on',
-                                renderLineHighlight: 'line',
-                                cursorBlinking: 'smooth',
-                                smoothScrolling: true,
-                                padding: { top: 16 },
-                            }}
-                        />
+    height="100%"
+    language={language}
+    defaultValue={code || ''}
+    theme="vs-dark"
+    onMount={(editor) => {
+        editorRef.current = editor;
+        editor.onDidChangeModelContent(() => {
+            const value = editor.getValue();
+            latestCode.current = value;
+
+            if (isRemoteChange.current) {
+                isRemoteChange.current = false;
+                return;
+            }
+
+            if (!isInitialized.current) {
+                isInitialized.current = true;
+                return;
+            }
+
+            setSaveStatus('unsaved');
+            sendCodeChange({
+                roomCode,
+                content: value,
+                senderUsername: username,
+                language,
+                timestamp: Date.now(),
+            });
+
+            if (debounceTimer.current) clearTimeout(debounceTimer.current);
+            debounceTimer.current = setTimeout(() => {
+                if (roomId) saveToServer(value, roomId);
+            }, 2000);
+        });
+    }}
+    options={{
+        fontSize: 13,
+        fontFamily: '"JetBrains Mono", "Fira Code", Menlo, monospace',
+        fontLigatures: true,
+        minimap: { enabled: false },
+        scrollBeyondLastLine: false,
+        wordWrap: 'on',
+        automaticLayout: true,
+        tabSize: 2,
+        lineNumbers: 'on',
+        renderLineHighlight: 'line',
+        cursorBlinking: 'smooth',
+        smoothScrolling: true,
+        padding: { top: 16 },
+    }}
+/>
                     )}
                 </div>
 
