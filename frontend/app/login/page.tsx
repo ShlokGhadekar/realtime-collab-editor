@@ -1,7 +1,9 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { authApi } from '@/lib/api';
+import { authApi, errorMessage, getSession, saveSession } from '@/lib/api';
+import { AuthLayout, Button, ErrorMessage, Field } from '@/components/ui';
 
 export default function LoginPage() {
     const router = useRouter();
@@ -10,73 +12,42 @@ export default function LoginPage() {
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
 
+    useEffect(() => {
+        if (getSession()) router.replace('/dashboard');
+    }, [router]);
+
     const handleLogin = async (e: React.FormEvent) => {
         e.preventDefault();
         setLoading(true);
         setError('');
         try {
             const res = await authApi.login({ email, password });
-            localStorage.setItem('token', res.data.token);
-            localStorage.setItem('username', res.data.username);
+            saveSession(res.data);
             router.push('/dashboard');
-        } catch {
-            setError('Invalid email or password');
-        } finally {
+        } catch (err) {
+            // the server says "Bad credentials"; keep the wording friendlier
+            const message = errorMessage(err, '');
+            setError(message.startsWith("Can't reach") ? message : 'Incorrect email or password.');
             setLoading(false);
         }
     };
 
     return (
-        <div className="min-h-screen bg-[#0d0d0d] flex items-center justify-center font-mono">
-            <div className="w-full max-w-sm px-6">
-                <div className="mb-10">
-                    <div className="flex items-center gap-2 mb-8">
-                        <div className="w-2 h-2 rounded-full bg-emerald-400" />
-                        <span className="text-white/60 text-sm font-bold tracking-tight">collabeditor</span>
-                    </div>
-                    <h1 className="text-2xl font-bold text-white/90">Welcome back</h1>
-                    <p className="text-white/30 text-sm mt-1">Sign in to continue</p>
-                </div>
-
-                {error && (
-                    <div className="bg-red-500/10 border border-red-500/20 text-red-400 px-4 py-3 rounded-lg mb-5 text-sm">
-                        {error}
-                    </div>
-                )}
-
-                <form onSubmit={handleLogin} className="space-y-3">
-                    <input
-                        type="email"
-                        value={email}
-                        onChange={(e) => setEmail(e.target.value)}
-                        className="w-full bg-white/[0.04] text-white/80 rounded-lg px-4 py-3 border border-white/[0.08] focus:border-white/20 focus:outline-none text-sm placeholder:text-white/20"
-                        placeholder="email"
-                        required
-                    />
-                    <input
-                        type="password"
-                        value={password}
-                        onChange={(e) => setPassword(e.target.value)}
-                        className="w-full bg-white/[0.04] text-white/80 rounded-lg px-4 py-3 border border-white/[0.08] focus:border-white/20 focus:outline-none text-sm placeholder:text-white/20"
-                        placeholder="password"
-                        required
-                    />
-                    <button
-                        type="submit"
-                        disabled={loading}
-                        className="w-full bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-black font-bold py-3 rounded-lg transition-all text-sm"
-                    >
-                        {loading ? 'signing in...' : 'sign in →'}
-                    </button>
-                </form>
-
-                <p className="text-white/20 text-sm mt-6 text-center">
-                    no account?{' '}
-                    <a href="/signup" className="text-emerald-400/70 hover:text-emerald-400 transition-colors">
-                        sign up
-                    </a>
-                </p>
-            </div>
-        </div>
+        <AuthLayout
+            title="Welcome back"
+            subtitle="Sign in to get back to your rooms."
+            footer={<>No account yet? <Link href="/signup" className="text-ink hover:text-primary-hover">Create one</Link></>}
+        >
+            <form onSubmit={handleLogin} className="space-y-4">
+                <ErrorMessage>{error}</ErrorMessage>
+                <Field label="Email" type="email" autoComplete="email" required autoFocus
+                    value={email} onChange={(e) => setEmail(e.target.value)} />
+                <Field label="Password" type="password" autoComplete="current-password" required
+                    value={password} onChange={(e) => setPassword(e.target.value)} />
+                <Button type="submit" variant="primary" className="w-full" loading={loading}>
+                    Sign in
+                </Button>
+            </form>
+        </AuthLayout>
     );
 }

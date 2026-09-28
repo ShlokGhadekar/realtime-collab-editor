@@ -68,7 +68,10 @@ ColabEditor is a full-stack collaborative coding platform that allows multiple u
 - Next.js
 - TypeScript
 - Monaco Editor
+- Yjs (CRDT)
 - Tailwind CSS
+
+The UI follows the design tokens in [`frontend/DESIGN.md`](frontend/DESIGN.md) (Linear's design language, from [VoltAgent/awesome-design-md](https://github.com/VoltAgent/awesome-design-md)); colors live as Tailwind theme tokens in `app/globals.css` and shared components in `components/ui.tsx`.
 
 ### Backend
 - Java 17

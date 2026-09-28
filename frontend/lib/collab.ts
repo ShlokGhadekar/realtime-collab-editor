@@ -67,8 +67,6 @@ export class CollabRoom {
 
     constructor(opts: RoomOptions) {
         this.opts = opts;
-        this.awareness.setLocalStateField('user', { name: opts.username, color: colorFor(opts.username) });
-
         this.doc.on('update', this.handleLocalUpdate);
         this.meta.observe(this.handleMetaChange);
         this.awareness.on('update', this.handleAwarenessUpdate);
@@ -86,6 +84,8 @@ export class CollabRoom {
             },
             onStompError: (frame) => console.error('STOMP error:', frame.headers.message),
         });
+        // after the listeners (so we appear in our own "online" list) and the client (which they use)
+        this.awareness.setLocalStateField('user', { name: opts.username, color: colorFor(opts.username) });
         this.client.activate();
     }
 

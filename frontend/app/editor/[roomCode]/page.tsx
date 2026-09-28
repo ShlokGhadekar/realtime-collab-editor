@@ -1,13 +1,21 @@
 'use client';
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { useRouter, useParams } from 'next/navigation';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import Link from 'next/link';
+import { useParams, useRouter } from 'next/navigation';
 import dynamic from 'next/dynamic';
-import type { OnMount } from '@monaco-editor/react';
-import { roomApi, executeCode, LANGUAGES } from '@/lib/api';
+import type { BeforeMount, OnMount } from '@monaco-editor/react';
+import { Check, ChevronRight, CircleAlert, Copy, Link2, Play } from 'lucide-react';
+import { errorMessage, executeCode, getSession, LANGUAGES, roomApi } from '@/lib/api';
 import { CollabRoom, Peer, SaveStatus } from '@/lib/collab';
 import { bindMonaco } from '@/lib/monaco-binding';
+import { defineTheme, editorOptions, THEME_NAME } from '@/lib/monaco-theme';
+import { AvatarStack, Button, buttonClass, Kbd, Spinner } from '@/components/ui';
+import { OutputPanel, RunResult } from '@/components/output-panel';
 
 const MonacoEditor = dynamic(() => import('@monaco-editor/react'), { ssr: false });
+
+// execution failures come back as normal output strings from the backend
+const FAILED_OUTPUT = /^(Execution error|Code execution is not configured|No response)/;
 
 export default function EditorPage() {
     const router = useRouter();
@@ -15,20 +23,25 @@ export default function EditorPage() {
 
     const [room, setRoom] = useState<CollabRoom | null>(null);
     const [roomName, setRoomName] = useState('');
+    const [joinError, setJoinError] = useState('');
     const [synced, setSynced] = useState(false);
     const [connected, setConnected] = useState(false);
     const [saveStatus, setSaveStatus] = useState<SaveStatus>('saved');
     const [peers, setPeers] = useState<Peer[]>([]);
     const [language, setLanguage] = useState('javascript');
-    const [output, setOutput] = useState<string | null>(null);
+    const [cursor, setCursor] = useState({ line: 1, column: 1 });
+    const [copied, setCopied] = useState<'code' | 'link' | null>(null);
+
     const [running, setRunning] = useState(false);
+    const [result, setResult] = useState<RunResult | null>(null);
     const [showOutput, setShowOutput] = useState(false);
-    const [copied, setCopied] = useState(false);
+    const [outputHeight, setOutputHeight] = useState(240);
+
     const unbindEditor = useRef<(() => void) | null>(null);
 
     useEffect(() => {
-        const username = localStorage.getItem('username');
-        if (!localStorage.getItem('token') || !username) { router.push('/login'); return; }
+        const session = getSession();
+        if (!session) { router.replace('/login'); return; }
 
         let collab: CollabRoom | null = null;
         let cancelled = false;
@@ -38,8 +51,8 @@ export default function EditorPage() {
             setRoomName(data.name);
             collab = new CollabRoom({
                 roomCode,
-                username,
-                initialContent: data.content || '// Start coding...\n',
+                username: session.username,
+                initialContent: data.content || `${LANGUAGES[data.language]?.comment ?? '//'} Start coding...\n`,
                 initialLanguage: data.language,
                 onSynced: () => setSynced(true),
                 onConnectionChange: setConnected,
@@ -48,7 +61,9 @@ export default function EditorPage() {
                 onLanguageChange: setLanguage,
             });
             setRoom(collab);
-        }).catch(() => router.push('/dashboard'));
+        }).catch((err) => {
+            if (!cancelled) setJoinError(errorMessage(err, `Room ${roomCode} doesn't exist or you can't access it.`));
+        });
 
         return () => {
             cancelled = true;
@@ -59,209 +74,179 @@ export default function EditorPage() {
     }, [roomCode, router]);
 
     const handleRun = useCallback(async () => {
-        if (!room) return;
+        if (!room || running) return;
         setRunning(true);
         setShowOutput(true);
-        setOutput('Running...');
+        const started = performance.now();
         try {
-            setOutput(await executeCode(room.text.toString(), room.language));
-        } catch {
-            setOutput('Execution failed.');
+            const output = await executeCode(room.text.toString(), room.language);
+            setResult({ output: output || '(no output)', failed: FAILED_OUTPUT.test(output), durationMs: performance.now() - started });
+        } catch (err) {
+            setResult({ output: errorMessage(err, 'Execution failed.'), failed: true, durationMs: performance.now() - started });
         } finally {
             setRunning(false);
         }
-    }, [room]);
+    }, [room, running]);
+
+    // Monaco commands are registered once, so they call the latest handlers through refs
+    const shortcuts = useRef({ run: handleRun, save: () => room?.save() });
+    useEffect(() => {
+        shortcuts.current = { run: handleRun, save: () => room?.save() };
+    }, [handleRun, room]);
+
+    // the same shortcuts when focus is outside the editor
+    useEffect(() => {
+        const onKeyDown = (e: KeyboardEvent) => {
+            if (!(e.metaKey || e.ctrlKey)) return;
+            if (e.key === 's') { e.preventDefault(); shortcuts.current.save(); }
+            if (e.key === 'Enter') { e.preventDefault(); shortcuts.current.run(); }
+        };
+        window.addEventListener('keydown', onKeyDown);
+        return () => window.removeEventListener('keydown', onKeyDown);
+    }, []);
+
+    const handleBeforeMount: BeforeMount = (monaco) => defineTheme(monaco);
 
     const handleMount: OnMount = (editor, monaco) => {
-        if (room) unbindEditor.current = bindMonaco(editor, monaco, room.text, room.awareness);
+        if (!room) return;
+        unbindEditor.current = bindMonaco(editor, monaco, room.text, room.awareness);
+        // Monaco binds ⌘↵ to "insert line below" and swallows the event, so claim it here
+        editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => shortcuts.current.run());
+        editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => shortcuts.current.save());
+        editor.onDidChangeCursorPosition(({ position }) =>
+            setCursor({ line: position.lineNumber, column: position.column }));
+        // Monaco measures glyphs once; re-measure after the web font arrives or cursors drift
+        document.fonts.ready.then(() => monaco.editor.remeasureFonts());
+        editor.focus();
     };
 
-    const copyRoomCode = () => {
-        navigator.clipboard.writeText(roomCode);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-    };
+    // only computed once the editor renders (client side), where CSS variables are readable
+    const options = useMemo(() => synced
+        ? editorOptions(`${getComputedStyle(document.documentElement).getPropertyValue('--font-jetbrains-mono')}, ui-monospace, Menlo, monospace`)
+        : undefined, [synced]);
 
-    useEffect(() => {
-        const handleKeyDown = (e: KeyboardEvent) => {
-            if ((e.metaKey || e.ctrlKey) && e.key === 's') {
-                e.preventDefault();
-                room?.save();
-            }
-            if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
-                e.preventDefault();
-                handleRun();
-            }
-        };
-        window.addEventListener('keydown', handleKeyDown);
-        return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [room, handleRun]);
+    const copy = (what: 'code' | 'link') => {
+        navigator.clipboard.writeText(what === 'code' ? roomCode : `${window.location.origin}/editor/${roomCode}`);
+        setCopied(what);
+        setTimeout(() => setCopied(null), 2000);
+    };
 
     // one avatar per person, even if they have the room open in several tabs
     const online = [...new Map(peers.map((p) => [p.name, p])).values()];
 
+    if (joinError) {
+        return (
+            <main className="flex flex-1 flex-col items-center justify-center gap-4 px-4 text-center">
+                <CircleAlert size={24} className="text-ink-subtle" />
+                <p className="max-w-sm text-sm text-ink-muted">{joinError}</p>
+                <Link href="/dashboard" className={buttonClass('secondary')}>Back to rooms</Link>
+            </main>
+        );
+    }
+
     return (
-        <div className="h-screen bg-[#0d0d0d] flex flex-col font-mono">
-            {/* Top bar */}
-            <div className="h-11 flex items-center justify-between px-4 border-b border-white/[0.06] bg-[#111111]">
-                <div className="flex items-center gap-3">
+        <div className="flex h-screen flex-col bg-canvas">
+            <title>{roomName ? `${roomName} · CollabEditor` : 'CollabEditor'}</title>
+
+            <header className="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-hairline px-3">
+                <nav className="flex min-w-0 items-center gap-1.5 text-sm">
+                    <Link href="/dashboard" className="shrink-0 rounded px-1.5 py-1 text-ink-subtle transition-colors hover:text-ink">Rooms</Link>
+                    <ChevronRight size={14} className="shrink-0 text-ink-tertiary" />
+                    <span className="truncate font-medium text-ink">{roomName}</span>
                     <button
-                        onClick={() => router.push('/dashboard')}
-                        className="flex items-center gap-1.5 text-white/40 hover:text-white/80 text-xs transition-colors"
+                        onClick={() => copy('code')}
+                        title="Copy room code"
+                        className="ml-1 hidden shrink-0 items-center gap-1.5 rounded-md sm:flex border border-hairline bg-surface-1 px-1.5 py-0.5 font-mono text-xs tracking-wider text-ink-subtle transition-colors hover:border-hairline-strong hover:text-ink"
                     >
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                            <path d="M19 12H5M12 19l-7-7 7-7" />
-                        </svg>
-                        Dashboard
+                        {roomCode}
+                        {copied === 'code' ? <Check size={12} className="text-success" /> : <Copy size={11} />}
                     </button>
-                    <span className="text-white/10">|</span>
-                    <div className="flex items-center gap-2">
-                        <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                        <span className="text-white/70 text-xs font-medium">{roomName}</span>
+                </nav>
+
+                <div className="flex shrink-0 items-center gap-2">
+                    <SaveIndicator status={saveStatus} />
+                    <div className="hidden sm:block"><AvatarStack people={online} /></div>
+                    <div className="hidden sm:block">
+                        <Button size="sm" onClick={() => copy('link')}>
+                            {copied === 'link' ? <Check size={13} className="text-success" /> : <Link2 size={13} />}
+                            {copied === 'link' ? 'Link copied' : 'Invite'}
+                        </Button>
                     </div>
-                    <button
-                        onClick={copyRoomCode}
-                        className="flex items-center gap-1.5 bg-white/[0.05] hover:bg-white/[0.09] border border-white/[0.08] rounded px-2 py-0.5 transition-all"
-                    >
-                        <span className="text-white/50 text-xs tracking-widest">{roomCode}</span>
-                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-white/30">
-                            <rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
-                        </svg>
-                        {copied && <span className="text-emerald-400 text-xs">✓</span>}
-                    </button>
-                </div>
-
-                <div className="flex items-center gap-3">
-                    <span className={`text-xs transition-all ${
-                        saveStatus === 'saved' ? 'text-emerald-400/70' :
-                        saveStatus === 'saving' ? 'text-blue-400/70' : 'text-amber-400/70'
-                    }`}>
-                        {saveStatus === 'saved' ? '● saved' :
-                         saveStatus === 'saving' ? '↑ saving' : '● unsaved'}
-                    </span>
-
-                    <div className="flex items-center">
-                        {online.slice(0, 5).map((peer, i) => (
-                            <div
-                                key={peer.name}
-                                title={peer.name}
-                                style={{ zIndex: 10 - i, marginLeft: i > 0 ? '-6px' : '0', backgroundColor: peer.color }}
-                                className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold text-black border-2 border-[#111111] relative"
-                            >
-                                {peer.name[0]?.toUpperCase()}
-                            </div>
-                        ))}
-                        {online.length > 5 && (
-                            <div style={{ zIndex: 0, marginLeft: '-6px' }} className="w-6 h-6 rounded-full bg-white/10 flex items-center justify-center text-[9px] text-white/50 border-2 border-[#111111]">
-                                +{online.length - 5}
-                            </div>
-                        )}
-                    </div>
-
                     <select
+                        aria-label="Language"
                         value={language}
                         onChange={(e) => room?.setLanguage(e.target.value)}
-                        className="bg-white/[0.05] border border-white/[0.08] text-white/60 text-xs rounded px-2 py-1 focus:outline-none focus:border-white/20"
+                        className="h-7 rounded-lg border border-hairline bg-surface-1 px-2 text-[13px] text-ink-muted transition-colors hover:border-hairline-strong focus:border-primary-focus focus:outline-none"
                     >
-                        {LANGUAGES.map((l) => (
-                            <option key={l} value={l} className="bg-[#1a1a1a]">{l}</option>
-                        ))}
+                        {Object.entries(LANGUAGES).map(([id, { label }]) => <option key={id} value={id}>{label}</option>)}
                     </select>
+                    <Button variant="primary" size="sm" onClick={handleRun} loading={running} disabled={!synced}>
+                        {!running && <Play size={12} fill="currentColor" />} Run <Kbd>⌘↵</Kbd>
+                    </Button>
+                </div>
+            </header>
 
-                    <button
-                        onClick={handleRun}
-                        disabled={running}
-                        className="flex items-center gap-1.5 bg-emerald-500 hover:bg-emerald-400 disabled:bg-emerald-500/40 text-black text-xs font-bold px-3 py-1.5 rounded transition-all"
-                    >
-                        <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor">
-                            <path d="M5 3l14 9-14 9V3z" />
-                        </svg>
-                        {running ? 'Running...' : 'Run'}
-                        <span className="text-black/40 text-[10px]">⌘↵</span>
-                    </button>
-
-                    <button
-                        onClick={() => room?.save()}
-                        className="text-white/30 hover:text-white/70 text-xs transition-colors"
-                    >
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                            <path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z" />
-                            <polyline points="17 21 17 13 7 13 7 21" />
-                            <polyline points="7 3 7 8 15 8" />
-                        </svg>
-                    </button>
-
-                    <div
-                        className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'}`}
-                        title={connected ? 'Connected' : 'Reconnecting...'}
+            <div className="relative min-h-0 flex-1 bg-surface-1">
+                {synced ? (
+                    <MonacoEditor
+                        height="100%"
+                        language={language}
+                        theme={THEME_NAME}
+                        beforeMount={handleBeforeMount}
+                        onMount={handleMount}
+                        loading={<EditorLoading label="Loading editor…" />}
+                        options={options}
                     />
-                </div>
-            </div>
-
-            {/* Editor + Output */}
-            <div className="flex-1 flex flex-col overflow-hidden">
-                <div className={`${showOutput ? 'h-[60%]' : 'h-full'} transition-all`}>
-                    {!synced ? (
-                        <div className="h-full flex items-center justify-center">
-                            <div className="flex items-center gap-3 text-white/20 text-sm">
-                                <svg className="animate-spin" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                    <path d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                                </svg>
-                                Loading editor...
-                            </div>
-                        </div>
-                    ) : (
-                        <MonacoEditor
-                            height="100%"
-                            language={language}
-                            theme="vs-dark"
-                            onMount={handleMount}
-                            options={{
-                                fontSize: 13,
-                                fontFamily: '"JetBrains Mono", "Fira Code", Menlo, monospace',
-                                fontLigatures: true,
-                                minimap: { enabled: false },
-                                scrollBeyondLastLine: false,
-                                wordWrap: 'on',
-                                automaticLayout: true,
-                                tabSize: 2,
-                                lineNumbers: 'on',
-                                renderLineHighlight: 'line',
-                                cursorBlinking: 'smooth',
-                                smoothScrolling: true,
-                                padding: { top: 16 },
-                            }}
-                        />
-                    )}
-                </div>
-
-                {showOutput && (
-                    <div className="flex flex-col border-t border-white/[0.06] bg-[#0a0a0a]" style={{ height: '40%' }}>
-                        <div className="flex items-center justify-between px-4 py-2 border-b border-white/[0.04]">
-                            <div className="flex items-center gap-2">
-                                <span className="text-white/30 text-xs uppercase tracking-wider">Output</span>
-                                {running && (
-                                    <svg className="animate-spin text-emerald-400" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                        <path d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                                    </svg>
-                                )}
-                            </div>
-                            <button
-                                onClick={() => setShowOutput(false)}
-                                className="text-white/20 hover:text-white/50 transition-colors"
-                            >
-                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                    <line x1="18" y1="6" x2="6" y2="18" />
-                                    <line x1="6" y1="6" x2="18" y2="18" />
-                                </svg>
-                            </button>
-                        </div>
-                        <pre className="flex-1 overflow-auto p-4 text-xs text-emerald-300/80 leading-relaxed font-mono">
-                            {output || 'No output yet. Press ⌘↵ to run.'}
-                        </pre>
-                    </div>
+                ) : (
+                    <EditorLoading label="Connecting to room…" />
                 )}
             </div>
+
+            {showOutput && (
+                <OutputPanel
+                    height={outputHeight}
+                    onResize={setOutputHeight}
+                    running={running}
+                    result={result}
+                    onClear={() => setResult(null)}
+                    onClose={() => setShowOutput(false)}
+                />
+            )}
+
+            <footer className="flex h-7 shrink-0 items-center justify-between border-t border-hairline px-3 text-[11px] text-ink-subtle">
+                <div className="flex items-center gap-4">
+                    <span className="flex items-center gap-1.5">
+                        <span className={`size-1.5 rounded-full ${connected ? 'bg-success' : 'animate-pulse bg-warning'}`} />
+                        {connected ? 'Connected' : 'Reconnecting…'}
+                    </span>
+                    <span>{online.length} online</span>
+                </div>
+                <div className="flex items-center gap-4">
+                    <span>Ln {cursor.line}, Col {cursor.column}</span>
+                    <span>{LANGUAGES[language]?.label ?? language}</span>
+                    <button onClick={() => setShowOutput(!showOutput)} className="transition-colors hover:text-ink">
+                        {showOutput ? 'Hide output' : 'Show output'}
+                    </button>
+                </div>
+            </footer>
+        </div>
+    );
+}
+
+function SaveIndicator({ status }: { status: SaveStatus }) {
+    return (
+        <span className="hidden items-center gap-1.5 px-1 text-xs text-ink-subtle md:flex" aria-live="polite">
+            {status === 'saving' && <><Spinner size={12} /> Saving…</>}
+            {status === 'saved' && <><Check size={13} /> Saved</>}
+            {status === 'unsaved' && <><span className="size-1.5 rounded-full bg-warning" /> Unsaved</>}
+        </span>
+    );
+}
+
+function EditorLoading({ label }: { label: string }) {
+    return (
+        <div className="flex h-full items-center justify-center gap-2 text-sm text-ink-subtle">
+            <Spinner /> {label}
         </div>
     );
 }
