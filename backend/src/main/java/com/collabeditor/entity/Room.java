@@ -27,7 +27,10 @@ public class Room {
     private String code; // the join code, e.g. "AB3X9K"
 
     @Column(columnDefinition = "TEXT")
-    private String content = ""; // the actual code being edited
+    private String content = ""; // plain-text copy of the code, for previews and execution
+
+    @Column(columnDefinition = "TEXT")
+    private String yjsState; // base64 Yjs snapshot, the source of truth for collaborative editing
 
     @Column(nullable = false)
     private String language = "javascript"; // syntax highlighting language

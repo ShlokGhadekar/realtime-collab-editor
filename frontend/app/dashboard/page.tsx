@@ -1,7 +1,7 @@
 'use client';
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { roomApi } from '@/lib/api';
+import { roomApi, LANGUAGES } from '@/lib/api';
 
 interface Room {
     id: number;
@@ -170,7 +170,7 @@ export default function DashboardPage() {
                             onChange={(e) => setNewRoomLang(e.target.value)}
                             className="w-full bg-white/[0.04] border border-white/[0.08] text-white/50 rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-white/20 mb-4"
                         >
-                            {['javascript', 'typescript', 'python', 'java', 'cpp', 'go', 'rust'].map(l => (
+                            {LANGUAGES.map(l => (
                                 <option key={l} value={l} className="bg-[#1a1a1a]">{l}</option>
                             ))}
                         </select>

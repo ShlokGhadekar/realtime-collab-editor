@@ -1,78 +1,79 @@
 'use client';
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import dynamic from 'next/dynamic';
-import { roomApi, executeCode, LANGUAGE_IDS } from '@/lib/api';
-import {
-    connectWebSocket,
-    disconnectWebSocket,
-    sendCodeChange,
-    CodeChangeMessage,
-    PresenceMessage,
-} from '@/lib/websocket';
+import type { OnMount } from '@monaco-editor/react';
+import { roomApi, executeCode, LANGUAGES } from '@/lib/api';
+import { CollabRoom, Peer, SaveStatus } from '@/lib/collab';
+import { bindMonaco } from '@/lib/monaco-binding';
 
 const MonacoEditor = dynamic(() => import('@monaco-editor/react'), { ssr: false });
 
-type SaveStatus = 'saved' | 'unsaved' | 'saving';
-
-const COLORS = [
-    'bg-violet-500', 'bg-emerald-500', 'bg-orange-500',
-    'bg-pink-500', 'bg-cyan-500', 'bg-yellow-500'
-];
-
 export default function EditorPage() {
     const router = useRouter();
-    const params = useParams();
-    const roomCode = params.roomCode as string;
+    const roomCode = useParams().roomCode as string;
 
-    const [code, setCode] = useState<string | null>(null);
-    const [language, setLanguage] = useState('javascript');
+    const [room, setRoom] = useState<CollabRoom | null>(null);
     const [roomName, setRoomName] = useState('');
-    const [roomId, setRoomId] = useState<number | null>(null);
-    const [members, setMembers] = useState<string[]>([]);
+    const [synced, setSynced] = useState(false);
     const [connected, setConnected] = useState(false);
-    const [username, setUsername] = useState('');
     const [saveStatus, setSaveStatus] = useState<SaveStatus>('saved');
+    const [peers, setPeers] = useState<Peer[]>([]);
+    const [language, setLanguage] = useState('javascript');
     const [output, setOutput] = useState<string | null>(null);
     const [running, setRunning] = useState(false);
     const [showOutput, setShowOutput] = useState(false);
     const [copied, setCopied] = useState(false);
+    const unbindEditor = useRef<(() => void) | null>(null);
 
-    // refs — never stale inside callbacks
-    const editorRef = useRef<any>(null);
-    const isRemoteChange = useRef(false);
-    const isInitialized = useRef(false);
-    const debounceTimer = useRef<NodeJS.Timeout | null>(null);
-    const autosaveTimer = useRef<NodeJS.Timeout | null>(null);
-    const latestCode = useRef('');
-    const usernameRef = useRef('');
-    const roomIdRef = useRef<number | null>(null);
-    const languageRef = useRef('javascript');
-    const roomCodeRef = useRef(roomCode);
+    useEffect(() => {
+        const username = localStorage.getItem('username');
+        if (!localStorage.getItem('token') || !username) { router.push('/login'); return; }
 
-    const saveToServer = async (content: string, id: number) => {
-        setSaveStatus('saving');
-        try {
-            await roomApi.saveContent(id, content);
-            setSaveStatus('saved');
-        } catch (e) {
-            console.error('Save failed', e);
-            setSaveStatus('unsaved');
-        }
-    };
+        let collab: CollabRoom | null = null;
+        let cancelled = false;
+        // joining is idempotent for members, and lets a shared /editor/CODE link work as an invite
+        roomApi.join(roomCode).then(({ data }) => {
+            if (cancelled) return;
+            setRoomName(data.name);
+            collab = new CollabRoom({
+                roomCode,
+                username,
+                initialContent: data.content || '// Start coding...\n',
+                initialLanguage: data.language,
+                onSynced: () => setSynced(true),
+                onConnectionChange: setConnected,
+                onSaveStatusChange: setSaveStatus,
+                onPeersChange: setPeers,
+                onLanguageChange: setLanguage,
+            });
+            setRoom(collab);
+        }).catch(() => router.push('/dashboard'));
 
-    const handleRun = async () => {
+        return () => {
+            cancelled = true;
+            unbindEditor.current?.();
+            unbindEditor.current = null;
+            collab?.destroy();
+        };
+    }, [roomCode, router]);
+
+    const handleRun = useCallback(async () => {
+        if (!room) return;
         setRunning(true);
         setShowOutput(true);
         setOutput('Running...');
         try {
-            const result = await executeCode(latestCode.current, languageRef.current);
-            setOutput(result);
+            setOutput(await executeCode(room.text.toString(), room.language));
         } catch {
             setOutput('Execution failed.');
         } finally {
             setRunning(false);
         }
+    }, [room]);
+
+    const handleMount: OnMount = (editor, monaco) => {
+        if (room) unbindEditor.current = bindMonaco(editor, monaco, room.text, room.awareness);
     };
 
     const copyRoomCode = () => {
@@ -81,91 +82,11 @@ export default function EditorPage() {
         setTimeout(() => setCopied(false), 2000);
     };
 
-    // keep refs in sync with state
-    useEffect(() => { usernameRef.current = username; }, [username]);
-    useEffect(() => { roomIdRef.current = roomId; }, [roomId]);
-    useEffect(() => { languageRef.current = language; }, [language]);
-
-    useEffect(() => {
-        const token = localStorage.getItem('token');
-        const user = localStorage.getItem('username') || '';
-        if (!token) { router.push('/login'); return; }
-        setUsername(user);
-        usernameRef.current = user;
-
-        roomApi.myRooms().then((res) => {
-            const room = res.data.find((r: {
-                code: string; name: string; language: string;
-                memberUsernames: string[]; id: number;
-            }) => r.code === roomCode);
-
-            if (!room) { router.push('/dashboard'); return; }
-
-            setRoomName(room.name);
-            setLanguage(room.language);
-            languageRef.current = room.language;
-            const uniqueMembers = [...new Set<string>(room.memberUsernames)];
-            setMembers(uniqueMembers);
-            setRoomId(room.id);
-            roomIdRef.current = room.id;
-
-            roomApi.getById(room.id).then((roomRes) => {
-                const savedContent = roomRes.data.content || '// Start coding...\n';
-                isInitialized.current = false;
-                setCode(savedContent);
-                latestCode.current = savedContent;
-            }).catch(() => {
-                isInitialized.current = false;
-                setCode('// Start coding...\n');
-                latestCode.current = '// Start coding...\n';
-            });
-        }).catch(() => router.push('/login'));
-
-        connectWebSocket(roomCode, user,
-            (msg: CodeChangeMessage) => {
-                if (msg.senderUsername !== user) {
-                    isRemoteChange.current = true;
-                    latestCode.current = msg.content;
-                    if (editorRef.current) {
-                        const editor = editorRef.current;
-                        const position = editor.getPosition();
-                        editor.setValue(msg.content);
-                        if (position) editor.setPosition(position);
-                    }
-                }
-            },
-            (msg: PresenceMessage) => {
-                setMembers((prev) => {
-                    const without = prev.filter((m) => m !== msg.username);
-                    if (msg.event === 'JOINED') return [...without, msg.username];
-                    return without;
-                });
-            },
-            () => setConnected(true)
-        );
-
-        return () => {
-            disconnectWebSocket(roomCode, user);
-            if (debounceTimer.current) clearTimeout(debounceTimer.current);
-            if (autosaveTimer.current) clearInterval(autosaveTimer.current);
-        };
-    }, [roomCode]);
-
-    useEffect(() => {
-        if (!roomId) return;
-        autosaveTimer.current = setInterval(() => {
-            if (saveStatus === 'unsaved' && roomIdRef.current) {
-                saveToServer(latestCode.current, roomIdRef.current);
-            }
-        }, 30000);
-        return () => { if (autosaveTimer.current) clearInterval(autosaveTimer.current); };
-    }, [roomId, saveStatus]);
-
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
             if ((e.metaKey || e.ctrlKey) && e.key === 's') {
                 e.preventDefault();
-                if (roomIdRef.current) saveToServer(latestCode.current, roomIdRef.current);
+                room?.save();
             }
             if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
                 e.preventDefault();
@@ -174,7 +95,10 @@ export default function EditorPage() {
         };
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, []);
+    }, [room, handleRun]);
+
+    // one avatar per person, even if they have the room open in several tabs
+    const online = [...new Map(peers.map((p) => [p.name, p])).values()];
 
     return (
         <div className="h-screen bg-[#0d0d0d] flex flex-col font-mono">
@@ -217,32 +141,29 @@ export default function EditorPage() {
                     </span>
 
                     <div className="flex items-center">
-                        {[...new Set(members)].slice(0, 5).map((member, i) => (
+                        {online.slice(0, 5).map((peer, i) => (
                             <div
-                                key={member}
-                                title={member}
-                                style={{ zIndex: 10 - i, marginLeft: i > 0 ? '-6px' : '0' }}
-                                className={`w-6 h-6 rounded-full ${COLORS[i % COLORS.length]} flex items-center justify-center text-[10px] font-bold text-white border-2 border-[#111111] relative`}
+                                key={peer.name}
+                                title={peer.name}
+                                style={{ zIndex: 10 - i, marginLeft: i > 0 ? '-6px' : '0', backgroundColor: peer.color }}
+                                className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold text-black border-2 border-[#111111] relative"
                             >
-                                {member[0].toUpperCase()}
+                                {peer.name[0]?.toUpperCase()}
                             </div>
                         ))}
-                        {members.length > 5 && (
+                        {online.length > 5 && (
                             <div style={{ zIndex: 0, marginLeft: '-6px' }} className="w-6 h-6 rounded-full bg-white/10 flex items-center justify-center text-[9px] text-white/50 border-2 border-[#111111]">
-                                +{members.length - 5}
+                                +{online.length - 5}
                             </div>
                         )}
                     </div>
 
                     <select
                         value={language}
-                        onChange={(e) => {
-                            setLanguage(e.target.value);
-                            languageRef.current = e.target.value;
-                        }}
+                        onChange={(e) => room?.setLanguage(e.target.value)}
                         className="bg-white/[0.05] border border-white/[0.08] text-white/60 text-xs rounded px-2 py-1 focus:outline-none focus:border-white/20"
                     >
-                        {Object.keys(LANGUAGE_IDS).map((l) => (
+                        {LANGUAGES.map((l) => (
                             <option key={l} value={l} className="bg-[#1a1a1a]">{l}</option>
                         ))}
                     </select>
@@ -260,7 +181,7 @@ export default function EditorPage() {
                     </button>
 
                     <button
-                        onClick={() => roomIdRef.current && saveToServer(latestCode.current, roomIdRef.current)}
+                        onClick={() => room?.save()}
                         className="text-white/30 hover:text-white/70 text-xs transition-colors"
                     >
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -272,7 +193,7 @@ export default function EditorPage() {
 
                     <div
                         className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'}`}
-                        title={connected ? 'Connected' : 'Connecting...'}
+                        title={connected ? 'Connected' : 'Reconnecting...'}
                     />
                 </div>
             </div>
@@ -280,7 +201,7 @@ export default function EditorPage() {
             {/* Editor + Output */}
             <div className="flex-1 flex flex-col overflow-hidden">
                 <div className={`${showOutput ? 'h-[60%]' : 'h-full'} transition-all`}>
-                    {code === null ? (
+                    {!synced ? (
                         <div className="h-full flex items-center justify-center">
                             <div className="flex items-center gap-3 text-white/20 text-sm">
                                 <svg className="animate-spin" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -293,44 +214,8 @@ export default function EditorPage() {
                         <MonacoEditor
                             height="100%"
                             language={language}
-                            defaultValue={code}
                             theme="vs-dark"
-                            onMount={(editor) => {
-                                editorRef.current = editor;
-                                isInitialized.current = false;
-
-                                editor.onDidChangeModelContent(() => {
-                                    const value = editor.getValue();
-                                    latestCode.current = value;
-
-                                    if (isRemoteChange.current) {
-                                        isRemoteChange.current = false;
-                                        return;
-                                    }
-
-                                    if (!isInitialized.current) {
-                                        isInitialized.current = true;
-                                        return;
-                                    }
-
-                                    setSaveStatus('unsaved');
-
-                                    sendCodeChange({
-                                        roomCode: roomCodeRef.current,
-                                        content: value,
-                                        senderUsername: usernameRef.current,
-                                        language: languageRef.current,
-                                        timestamp: Date.now(),
-                                    });
-
-                                    if (debounceTimer.current) clearTimeout(debounceTimer.current);
-                                    debounceTimer.current = setTimeout(() => {
-                                        if (roomIdRef.current) {
-                                            saveToServer(value, roomIdRef.current);
-                                        }
-                                    }, 2000);
-                                });
-                            }}
+                            onMount={handleMount}
                             options={{
                                 fontSize: 13,
                                 fontFamily: '"JetBrains Mono", "Fira Code", Menlo, monospace',

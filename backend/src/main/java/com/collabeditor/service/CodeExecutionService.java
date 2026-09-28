@@ -1,14 +1,11 @@
 package com.collabeditor.service;
 
-import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.RestTemplate;
-import java.util.HashMap;
+import org.springframework.web.client.RestClient;
 import java.util.Map;
 
 @Service
-@RequiredArgsConstructor
 public class CodeExecutionService {
 
     @Value("${jdoodle.client-id}")
@@ -17,35 +14,37 @@ public class CodeExecutionService {
     @Value("${jdoodle.client-secret}")
     private String clientSecret;
 
-    private final RestTemplate restTemplate;
+    private final RestClient restClient = RestClient.create("https://api.jdoodle.com/v1");
 
-    private static final Map<String, String[]> LANGUAGE_MAP = new HashMap<>() {
-        {
-            put("java", new String[] { "java", "4" });
-            put("python", new String[] { "python3", "4" });
-            put("javascript", new String[] { "nodejs", "4" });
-            put("cpp", new String[] { "cpp17", "1" });
-            put("go", new String[] { "go", "4" });
-            put("rust", new String[] { "rust", "4" });
-            put("typescript", new String[] { "nodejs", "4" });
-        }
-    };
+    // editor language -> { JDoodle language, JDoodle version index }
+    private static final Map<String, String[]> LANGUAGE_MAP = Map.of(
+            "java", new String[] { "java", "4" },
+            "python", new String[] { "python3", "4" },
+            "javascript", new String[] { "nodejs", "4" },
+            "typescript", new String[] { "nodejs", "4" },
+            "cpp", new String[] { "cpp17", "1" },
+            "go", new String[] { "go", "4" },
+            "rust", new String[] { "rust", "4" });
 
     public String execute(String code, String language) {
-        String[] langConfig = LANGUAGE_MAP.getOrDefault(language, new String[] { "nodejs", "4" });
+        if (clientId.isBlank() || clientSecret.isBlank()) {
+            return "Code execution is not configured on this server.";
+        }
 
-        Map<String, String> request = new HashMap<>();
-        request.put("clientId", clientId);
-        request.put("clientSecret", clientSecret);
-        request.put("script", code);
-        request.put("language", langConfig[0]);
-        request.put("versionIndex", langConfig[1]);
+        String[] langConfig = LANGUAGE_MAP.getOrDefault(language, LANGUAGE_MAP.get("javascript"));
+        Map<String, String> request = Map.of(
+                "clientId", clientId,
+                "clientSecret", clientSecret,
+                "script", code,
+                "language", langConfig[0],
+                "versionIndex", langConfig[1]);
 
         try {
-            Map<?, ?> response = restTemplate.postForObject(
-                    "https://api.jdoodle.com/v1/execute",
-                    request,
-                    Map.class);
+            Map<?, ?> response = restClient.post()
+                    .uri("/execute")
+                    .body(request)
+                    .retrieve()
+                    .body(Map.class);
             if (response == null)
                 return "No response from execution engine";
             Object output = response.get("output");

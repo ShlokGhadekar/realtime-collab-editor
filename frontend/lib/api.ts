@@ -6,7 +6,6 @@ const api = axios.create({
     baseURL: API_BASE,
 });
 
-
 // attach JWT token to every request
 api.interceptors.request.use((config) => {
     const token = localStorage.getItem('token');
@@ -45,27 +44,10 @@ export const roomApi = {
         api.post(`/rooms/join/${code}`),
     myRooms: () =>
         api.get('/rooms/my-rooms'),
-    getById: (id: number) =>
-        api.get(`/rooms/${id}`),
-    getContent: (id: number) =>
-        api.get(`/rooms/${id}/content`),
-    saveContent: (id: number, content: string) =>
-        api.put(`/rooms/${id}/save`, { content }),
 };
 
-
-// Piston API - free, no key needed
-
-
-export const LANGUAGE_IDS: Record<string, string> = {
-    javascript: 'javascript',
-    typescript: 'typescript',
-    python: 'python',
-    java: 'java',
-    cpp: 'cpp',
-    go: 'go',
-    rust: 'rust',
-};
+// must match CodeExecutionService.LANGUAGE_MAP on the backend
+export const LANGUAGES = ['javascript', 'typescript', 'python', 'java', 'cpp', 'go', 'rust'];
 
 export const executeCode = async (code: string, language: string): Promise<string> => {
     const res = await api.post('/execute', { code, language });

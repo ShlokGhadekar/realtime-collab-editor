@@ -85,20 +85,6 @@ public class RoomService {
                 .toList();
     }
 
-    public RoomResponse getRoomById(Long id) {
-        Room room = roomRepository.findById(id)
-                .orElseThrow(() -> new RuntimeException("Room not found"));
-        return toResponse(room);
-    }
-
-    @Transactional
-    public void updateRoomContent(String roomCode, String content) {
-        Room room = roomRepository.findByCode(roomCode)
-                .orElseThrow(() -> new RuntimeException("Room not found: " + roomCode));
-        room.setContent(content);
-        roomRepository.save(room);
-    }
-
     private RoomResponse toResponse(Room room) {
         List<String> memberUsernames = room.getMembers().stream()
                 .map(m -> m.getUser().getUsername())
@@ -109,24 +95,21 @@ public class RoomService {
                 room.getName(),
                 room.getCode(),
                 room.getLanguage(),
-                room.getContent(), // add this
+                room.getContent(),
                 room.getOwner().getUsername(),
                 memberUsernames,
                 memberUsernames.size(),
                 room.getCreatedAt());
     }
 
-    public String getRoomContent(Long roomId) {
-        Room room = roomRepository.findById(roomId)
-                .orElseThrow(() -> new RuntimeException("Room not found"));
-        return room.getContent();
-    }
-
     @Transactional
-    public void saveContent(Long roomId, String content) {
-        Room room = roomRepository.findById(roomId)
-                .orElseThrow(() -> new RuntimeException("Room not found"));
+    public void saveSnapshot(String roomCode, String yjsState, String content, String language) {
+        Room room = roomRepository.findByCode(roomCode)
+                .orElseThrow(() -> new RuntimeException("Room not found: " + roomCode));
+        room.setYjsState(yjsState);
         room.setContent(content);
-        roomRepository.save(room);
+        if (language != null && !language.isBlank()) {
+            room.setLanguage(language);
+        }
     }
 }

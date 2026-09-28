@@ -143,24 +143,22 @@ npm run dev
 
 ### Backend
 
-Create a `.env` file:
+Copy `backend/.env.example` to `backend/.env` and fill it in. Spring loads this file automatically; in production, set the same values as environment variables instead.
 
 ```env
-DATABASE_URL=jdbc:postgresql://localhost:5432/collabeditor
-DATABASE_USERNAME=postgres
-DATABASE_PASSWORD=password
-
-JWT_SECRET=your_secret_key
-
-JDOODLE_CLIENT_ID=your_client_id
-JDOODLE_CLIENT_SECRET=your_client_secret
+JWT_SECRET=            # required, generate with: openssl rand -hex 32
+JDOODLE_CLIENT_ID=     # optional, enables code execution
+JDOODLE_CLIENT_SECRET=
+CORS_ALLOWED_ORIGINS=  # optional, comma-separated frontend URLs
 ```
 
 ### Frontend
 
+Create `frontend/.env.local`:
+
 ```env
-NEXT_PUBLIC_API_URL=http://localhost:8080
-NEXT_PUBLIC_WS_URL=ws://localhost:8080/ws
+NEXT_PUBLIC_API_URL=http://localhost:8080/api
+NEXT_PUBLIC_WS_URL=http://localhost:8080/ws
 ```
 
 ---
@@ -171,7 +169,11 @@ NEXT_PUBLIC_WS_URL=ws://localhost:8080/ws
 JWT authentication does not automatically propagate to WebSocket connections. A custom STOMP interceptor validates tokens before establishing WebSocket sessions.
 
 ### Real-Time Synchronization
-Managing concurrent edits while maintaining a smooth user experience required debounced update handling and efficient WebSocket messaging.
+The first version broadcast the whole document on every keystroke and replaced each client's editor contents. Under real network latency, clients received stale copies of their own edits, which dropped characters and made cursors jump.
+
+The editor now uses a **Yjs CRDT**. A custom Monaco binding (`frontend/lib/monaco-binding.ts`) turns each keystroke into a small insert/delete operation, and concurrent edits merge deterministically on every client. The Spring server never parses these updates. It acts as a **sequencer**: it numbers each update, broadcasts it in order, and keeps a log so joining clients can catch up (`RoomSyncService`). Clients periodically send a compacted snapshot, which trims the log and is persisted to PostgreSQL. Sequence numbers let a client detect a missed message and resync, and after a reconnect it pushes its full state so offline edits are never lost.
+
+The same channel carries Yjs *awareness* data, which powers live cursors with name labels and the "who's online" avatars. Undo/redo goes through `Y.UndoManager`, so it only reverts your own changes.
 
 ### Monaco Editor Integration
 Monaco Editor was integrated using an uncontrolled approach to avoid unnecessary React re-renders and improve typing performance.
@@ -203,12 +205,10 @@ LinkedIn: https://www.linkedin.com/in/shlok-ghadekar/
 
 ## ⭐ Future Improvements
 
-- Operational Transformation (OT) / CRDT-based conflict resolution
-- Redis Pub/Sub for horizontal scaling
+- Redis Pub/Sub for horizontal scaling (the update log is currently in memory, so the backend runs as a single instance)
 - Shared terminal support
 - Voice collaboration rooms
 - File explorer and project workspace support
-- Presence indicators and cursor tracking
 
 ---
 
