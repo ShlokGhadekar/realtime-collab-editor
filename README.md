@@ -4,6 +4,10 @@
 
 ColabEditor is a full-stack collaborative coding platform that allows multiple users to write, edit, and execute code together in real time. Inspired by collaborative tools like Google Docs, it combines live synchronization, authentication, and code execution into a single developer-friendly workspace.
 
+**Live demo:** https://realtime-collab-editor-two.vercel.app
+
+![ColabEditor landing page](docs/screenshots/landing.png)
+
 ---
 
 ## ✨ Features
@@ -82,12 +86,12 @@ The UI follows the design tokens in [`frontend/DESIGN.md`](frontend/DESIGN.md) (
 - JWT Authentication
 
 ### Database
-- PostgreSQL
+- PostgreSQL (hosted on Neon)
 
 ### Deployment
 - Docker
-- Render
-- Vercel
+- Render (backend)
+- Vercel (frontend)
 
 ---
 
@@ -95,21 +99,19 @@ The UI follows the design tokens in [`frontend/DESIGN.md`](frontend/DESIGN.md) (
 
 ### Collaborative Editor
 
-```md
-![Collaborative Editor](assets/editor.png)
-```
+Two people in the same room: jordan's selection and cursor show up live on nina's screen, with presence avatars in the top bar.
 
-### Dashboard
-
-```md
-![Dashboard](assets/dashboard.png)
-```
+![Collaborative editor with a second user's live cursor](docs/screenshots/editor.png)
 
 ### Code Execution
 
-```md
-![Code Execution](assets/execution.png)
-```
+Run the file in any of 7 languages; output appears in a resizable panel with the run time.
+
+![Code execution output panel](docs/screenshots/execution.png)
+
+### Dashboard
+
+![Dashboard listing rooms](docs/screenshots/dashboard.png)
 
 ---
 
