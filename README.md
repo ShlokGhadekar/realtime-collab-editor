@@ -6,7 +6,9 @@ ColabEditor is a full-stack collaborative coding platform that allows multiple u
 
 **Live demo:** https://realtime-collab-editor-two.vercel.app
 
-![ColabEditor landing page](docs/screenshots/landing.png)
+<a href="docs/demo.mp4"><img src="docs/demo.gif" alt="ColabEditor demo: two people typing in the same line, live cursors, invite by link, running code" width="100%"></a>
+
+<sub>▶ Click the preview for the full 21-second video with sound.</sub>
 
 ---
 
@@ -112,6 +114,10 @@ Run the file in any of 7 languages; output appears in a resizable panel with the
 ### Dashboard
 
 ![Dashboard listing rooms](docs/screenshots/dashboard.png)
+
+### Landing Page
+
+![ColabEditor landing page](docs/screenshots/landing.png)
 
 ---
 
